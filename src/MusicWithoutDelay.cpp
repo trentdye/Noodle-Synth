@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 #include "Arduino.h"
+#include "Wire.h"
 #include "MusicWithoutDelay.h"
 #include "Noodles_Settings.h"
 static uint8_t globalInstrument=0;
@@ -30,14 +31,16 @@ synthEngine * MusicWithoutDelay::noodleSynth = NULL; //This is extremely importa
 static const int powers[] = {1, 10, 100, 1000};
 double dur = 0;
 bool firstTime;
-MusicWithoutDelay::MusicWithoutDelay(const char *p) {
+MusicWithoutDelay::MusicWithoutDelay(uint16_t memLocation) {
   default_dur = 1;  //eqivalent to a wholenote
   default_oct = 4;
   bpm = 100;
   wholenote = (60 * 1000L / bpm) * 4;
   myInstrument=globalInstrument;
   globalInstrument++;
-  newSong(p);
+  //newSong(memLocation); // We're just going to call this function ourselves, so we can initialize Wire first
+
+  //Trent Edits
 }
 MusicWithoutDelay::MusicWithoutDelay() {
   myInstrument=globalInstrument;
@@ -58,53 +61,73 @@ MusicWithoutDelay& MusicWithoutDelay:: begin(int waveForm, int envelope, int mod
   noodleSynth->setupVoice(myInstrument,waveForm,60,envelope,70,mod+64);
   return *this;
 }
-MusicWithoutDelay& MusicWithoutDelay:: newSong(const char *p) {
+MusicWithoutDelay& MusicWithoutDelay:: newSong(uint16_t memLocation) {
+  //This function is responsible for parsing the first RTTL segments: the song name and the options
+  //Since the song name is sort of irrelevant, 
+  uint16_t count = 0;
+  Serial.println((char) readEEPROM(memLocation));
+  Serial.println(".");
+  Wire.begin();
+
+  //trent edit
+  track1_len = 0;
+  track2_len = 0;
+
   playSingleNote=false;
   pMillis = 0;
   slurCount = 0;
   num = 0;
   note = 0;
-  mySong = p;
+  mySong = memLocation;
   num = 0;
   loc=0;
   start = true;
-  if (pgm_read_byte_near(mySong)!= ':') {
-    memset(songName, 0, 15);
-    while (pgm_read_byte_near(mySong+loc) != ':') {
-      if (num < 15) songName[num] = pgm_read_byte_near(mySong+loc++);
+
+
+  //GET SONG NAME
+  if (readEEPROM(mySong)!= ':') {
+    memset(songName, 0, 4); //changed from 15 to 4
+    while (readEEPROM(mySong+loc) != ':') {
+      if (num < 15) songName[num] = readEEPROM(mySong+loc++);
       num++;
+      Serial.println("*"); //DEBUG
     }
+    
   }
   loc++;//skip semicolon
   // get default duration
   bool once = true;
-  while (pgm_read_byte_near(mySong+loc) != ':') {
+
+  //GET SONG OPTIONS
+  while (readEEPROM(mySong+loc) != ':') {
+    count++; //DEBUG
+    if(count % 100 == 0) Serial.println("#"); //DEBUG
     if (!once)
     loc++;
     else
     once = false;
-    switch (pgm_read_byte_near(mySong+loc)) {
+    switch (readEEPROM(mySong+loc)) {
       case 'd':
       loc += 2;       // skip "b="
       num = 0;
-      while (isDigit(pgm_read_byte_near(mySong+loc)))
+      while (isDigit(readEEPROM(mySong+loc)))
       {
-        num = (num * 10) + (pgm_read_byte_near(mySong+loc++) - '0');
+        num = (num * 10) + (readEEPROM(mySong+loc++) - '0');
       }
       if (num > 0) default_dur = num;
       break;
       case 'o':
       loc += 2;        // skip "o="
-      num = pgm_read_byte_near(mySong+loc++) - '0';
+      num = readEEPROM(mySong+loc++) - '0';
       if (num >= 1 && num <= 7) default_oct = num;
       break;
       // get BPM
       case 'b':
       loc += 2;       // skip "b="
       num = 0;
-      while (isDigit(pgm_read_byte_near(mySong+loc)))
+      while (isDigit(readEEPROM(mySong+loc)))
       {
-        num = (num * 10) + (pgm_read_byte_near(mySong+loc++) - '0');
+        num = (num * 10) + (readEEPROM(mySong+loc++) - '0');
       }
       bpm = num;
       wholenote = (60 * 1000L / bpm) * 4;
@@ -113,31 +136,37 @@ MusicWithoutDelay& MusicWithoutDelay:: newSong(const char *p) {
       loc += 2;       // skip "f="
       num = 0;
       memset(autoFlat, 0, 5);
-      while (isAlpha(pgm_read_byte_near(mySong+loc)))
+      while (isAlpha(readEEPROM(mySong+loc)))
       {
-        autoFlat[num] = (char)pgm_read_byte_near(mySong+loc++);
+        autoFlat[num] = (char)readEEPROM(mySong+loc++);
         num++;
+        Serial.print("x"); //DEBUG
       }
       break;
       case 's':
       loc += 2;       // skip "s="
       num = 0;
       memset(autoSharp, 0, 5);
-      while (isAlpha(pgm_read_byte_near(mySong+loc)))
+      while (isAlpha(readEEPROM(mySong+loc)))
       {
-        autoSharp[num] = (char)pgm_read_byte_near(mySong+loc++);
+        autoSharp[num] = (char)readEEPROM(mySong+loc++);
         num++;
+        Serial.print("y"); //DEBUG
       }
       break;
     }
   }
   pLoc=loc;
-  loc = strlen_P(mySong);
+  loc = getLength(mySong);
+  Serial.println("LENGTH"); //DEBUG
+  Serial.println(getLength(mySong)); //DEBUG
   totalTime = 0;
   skipCount = pLoc;
-  while (((unsigned)skipCount) < strlen_P(mySong)) {
+  while (((unsigned)skipCount) < getLength(mySong)) {
     totalTime += skipSolver();
+    Serial.print("$"); //DEBUG
   }
+  Serial.println(","); //DEBUG
   return *this;
 }
 // void MusicWithoutDelay :: readIt(){
@@ -146,15 +175,15 @@ MusicWithoutDelay& MusicWithoutDelay:: newSong(const char *p) {
 //   Serial.print("doct: "); Serial.println(default_oct, 10);
 //   Serial.print("bpm: "); Serial.println(bpm, 10);
 //
-//   for(int i=0; i<strlen_P(mySong);i++){
-//     Serial.print((char)pgm_read_byte_near(mySong+i));
+//   for(int i=0; i<getLength(mySong);i++){
+//     Serial.print((char)readEEPROM(mySong+i));
 //   }
 //   Serial.println();
-//   for(int i=strlen_P(mySong); i>=0;i--){
-//     Serial.print((char)pgm_read_byte_near(mySong+i));
+//   for(int i=getLength(mySong); i>=0;i--){
+//     Serial.print((char)readEEPROM(mySong+i));
 //   }
 //   Serial.println();
-//   Serial.print("Length: ");Serial.println(strlen_P(mySong));
+//   Serial.print("Length: ");Serial.println(getLength(mySong));
 // }
 MusicWithoutDelay&  MusicWithoutDelay:: update() {
   //Serial.print("Delayer: ");Serial.println(delayer);
@@ -198,18 +227,20 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
             start = false;
           }
           finish = false;
-          if (loc < strlen_P(mySong))
+          if (loc < getLength(mySong))
           {
-            if (pgm_read_byte_near(mySong+loc) == ':')
+            if (readEEPROM(mySong+loc) == ':')
             loc++;
-            while (isWhitespace(pgm_read_byte_near(mySong+loc))) {
+            while (isWhitespace(readEEPROM(mySong+loc))) {
               loc++;
+              Serial.println("g"); //DEBUG
             }
             // first, get note duration, if available
             num = 0;
-            while (isdigit(pgm_read_byte_near(mySong+loc)))
+            while (isdigit(readEEPROM(mySong+loc)))
             {
-              num = (num * 10) + (pgm_read_byte_near(mySong+loc++) - '0');
+              num = (num * 10) + (readEEPROM(mySong+loc++) - '0');
+              Serial.println("h"); //DEBUG
             }
 
             if (!skip) {
@@ -218,7 +249,7 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
                 duration = wholenote / default_dur;
               }
               // now, get optional '.' dotted note
-              if (pgm_read_byte_near(mySong+loc) == '.')
+              if (readEEPROM(mySong+loc) == '.')
               {
                 duration += duration / 2;
                 loc++;
@@ -251,16 +282,16 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
             // now get the note
             note = 0;
             for (int i = 0; i < 5; i++) {
-              if (pgm_read_byte_near(mySong+loc) == autoFlat[i]) {
+              if (readEEPROM(mySong+loc) == autoFlat[i]) {
                 note--;
                 break;
               }
-              else if (pgm_read_byte_near(mySong+loc) == autoSharp[i]) {
+              else if (readEEPROM(mySong+loc) == autoSharp[i]) {
                 note++;
                 break;
               }
             }
-            switch (pgm_read_byte_near(mySong+loc))
+            switch (readEEPROM(mySong+loc))
             {
               case 'c':
               note += 1;
@@ -289,17 +320,17 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
             }
             loc++;
             if (!skip) {
-              if (pgm_read_byte_near(mySong+loc) == '.')
+              if (readEEPROM(mySong+loc) == '.')
               {
                 duration += duration / 2;
                 loc++;
               }
             }
             // now, get optional '#' sharp
-            if (pgm_read_byte_near(mySong+loc) == '#')
+            if (readEEPROM(mySong+loc) == '#')
             {
               for (int i = 0; i < 5; i++) {
-                if (pgm_read_byte_near(mySong+loc-1) == autoSharp[i]) {
+                if (readEEPROM(mySong+loc-1) == autoSharp[i]) {
                   note--;
                   break;
                 }
@@ -307,10 +338,10 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
               note++;
               loc++;
             }
-            else if (pgm_read_byte_near(mySong+loc) == '_') //for the flats
+            else if (readEEPROM(mySong+loc) == '_') //for the flats
             {
               for (int i = 0; i < 5; i++) {
-                if (pgm_read_byte_near(mySong+loc-1) == autoFlat[i]) {
+                if (readEEPROM(mySong+loc-1) == autoFlat[i]) {
                   note++;
                   break;
                 }
@@ -318,11 +349,11 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
               note--;
               loc++;
             }
-            if (pgm_read_byte_near(mySong+loc) == '-')
+            if (readEEPROM(mySong+loc) == '-')
             {
               loc++;
-              if (isDigit(pgm_read_byte_near(mySong+loc))) {
-                scale = pgm_read_byte_near(mySong+loc) - '0';
+              if (isDigit(readEEPROM(mySong+loc))) {
+                scale = readEEPROM(mySong+loc) - '0';
                 scale = default_oct - scale;
                 if (scale < 1)
                 scale = 1;
@@ -333,9 +364,9 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
               }
             }
             // now, get scale
-            else if (isdigit(pgm_read_byte_near(mySong+loc)))
+            else if (isdigit(readEEPROM(mySong+loc)))
             {
-              scale = pgm_read_byte_near(mySong+loc) - '0';
+              scale = readEEPROM(mySong+loc) - '0';
               scale = default_oct + scale;
               if (scale > 7)
               scale = 7;
@@ -345,20 +376,21 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
             {
               scale = default_oct;
             }
-            while (isWhitespace(pgm_read_byte_near(mySong+loc))) {
+            while (isWhitespace(readEEPROM(mySong+loc))) {
               loc++;
+              Serial.println("a"); //DEBUG
             }
             delayer = true;
             if(!sustainControl)
             setSustain(SUSTAIN);
-            if (pgm_read_byte_near(mySong+loc) == ',') {
-              loc++;     // skip comma for next note (or we may be at the end)
+            if (readEEPROM(mySong+loc) == ',') {
+              loc++;     // skip wcomma for next note (or we may be at the end)
               if (slurCount != 0) {
                 beat = true;
                 slurCount = 0;
               }
               slur = false;
-            } else if (pgm_read_byte_near(mySong+loc) == '+') {
+            } else if (readEEPROM(mySong+loc) == '+') {
               loc++;
               beat = true;
               if (slurCount == 0) {
@@ -402,7 +434,7 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
 
           // now begin note loop
           if ((!finish && start) || finish) {
-            loc = strlen_P(mySong) - 1;
+            loc = getLength(mySong) - 1;
             currentTime = totalTime;
             finish = false;
           }
@@ -410,14 +442,15 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
           if (loc > pLoc)
           {
             note = 0;
-            while (isWhitespace(pgm_read_byte_near(mySong+loc))) {
+            while (isWhitespace(readEEPROM(mySong+loc))) {
               loc--;
+              Serial.println("b"); //DEBUG
             }
             // now, get scale
-            if (isdigit(pgm_read_byte_near(mySong+loc)))
+            if (isdigit(readEEPROM(mySong+loc)))
             {
-              scale = pgm_read_byte_near(mySong+loc) - '0';
-              if (pgm_read_byte_near(mySong+loc-1) == '-') {
+              scale = readEEPROM(mySong+loc) - '0';
+              if (readEEPROM(mySong+loc-1) == '-') {
                 loc--;
                 scale *= -1;
               }
@@ -435,20 +468,20 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
 
 
             for (int i = 0; i < 5; i++) {
-              if (pgm_read_byte_near(mySong+loc) == autoFlat[i]) {
+              if (readEEPROM(mySong+loc) == autoFlat[i]) {
                 note--;
                 break;
               }
-              else if (pgm_read_byte_near(mySong+loc) == autoSharp[i]) {
+              else if (readEEPROM(mySong+loc) == autoSharp[i]) {
                 note++;
                 break;
               }
             }
             // now, get optional '#' sharp
-            if (pgm_read_byte_near(mySong+loc) == '#')
+            if (readEEPROM(mySong+loc) == '#')
             {
               for (int i = 0; i < 5; i++) {
-                if (pgm_read_byte_near(mySong+loc+1) == autoSharp[i]) {
+                if (readEEPROM(mySong+loc+1) == autoSharp[i]) {
                   note--;
                   break;
                 }
@@ -456,10 +489,10 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
               note++;
               loc--;
             }
-            else if (pgm_read_byte_near(mySong+loc) == '_')
+            else if (readEEPROM(mySong+loc) == '_')
             {
               for (int i = 0; i < 5; i++) {
-                if (pgm_read_byte_near(mySong+loc+1) == autoFlat[i]) {
+                if (readEEPROM(mySong+loc+1) == autoFlat[i]) {
                   note++;
                   break;
                 }
@@ -468,7 +501,7 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
               loc--;
             }
 
-            switch (pgm_read_byte_near(mySong+loc))
+            switch (readEEPROM(mySong+loc))
             {
               case 'c':
               note += 1;
@@ -500,21 +533,22 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
             bool period = false;
             // now, get optional '.' dotted note
             if (!skip) {
-              if (pgm_read_byte_near(mySong+loc) == '.')
+              if (readEEPROM(mySong+loc) == '.')
               {
                 period = true;
                 loc--;
               }
               // first, get note duration, if available
               num = 0;
-              if (isDigit(pgm_read_byte_near(mySong+loc)))
+              if (isDigit(readEEPROM(mySong+loc)))
               {
                 int i = 0;
-                while (isdigit(pgm_read_byte_near(mySong+loc)))
+                while (isdigit(readEEPROM(mySong+loc)))
                 {
-                  num = ((pgm_read_byte_near(mySong+loc) - '0') * powers[i]) + num ;
+                  num = ((readEEPROM(mySong+loc) - '0') * powers[i]) + num ;
                   loc--;
                   i++;
+                  Serial.println("c"); //DEBUG
                 }
               }
               if (num)duration = wholenote / num;
@@ -547,20 +581,21 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
             noodleSynth->setLength(myInstrument,set);
 
 
-            while (isWhitespace(pgm_read_byte_near(mySong+loc))) {
+            while (isWhitespace(readEEPROM(mySong+loc))) {
               loc--;
+              Serial.println("d"); //DEBUG
             }
             delayer = true;
             if(!sustainControl)
             setSustain(SUSTAIN);
-            if (pgm_read_byte_near(mySong+loc) == ',') {
+            if (readEEPROM(mySong+loc) == ',') {
               loc--;     // skip comma for next note (or we may be at the end)
               if (slurCount != 0) {
                 beat = true;
                 slurCount = 0;
               }
               slur = false;
-            } else if (pgm_read_byte_near(mySong+loc) == '+') {
+            } else if (readEEPROM(mySong+loc) == '+') {
               loc--;
               beat = true;
               if (slurCount == 0) {
@@ -589,7 +624,7 @@ MusicWithoutDelay&  MusicWithoutDelay:: update() {
           }
           else {
             delayer = false;
-            loc = strlen_P(mySong) - 1;
+            loc = getLength(mySong) - 1;
             start = true;
             if (finish) {
               finish = false;
@@ -691,34 +726,42 @@ MusicWithoutDelay& MusicWithoutDelay :: pause(bool p) {
   return *this;
 }
 double MusicWithoutDelay :: skipSolver() {
+  static uint16_t count = 0; //DEBUG
   num = 0;
   bool period = false;
-  while (!isAlpha(pgm_read_byte_near(mySong+skipCount))) {
-    if (pgm_read_byte_near(mySong+skipCount) == '.'){
+  while (!isAlpha(readEEPROM(mySong+skipCount))) {
+    if (readEEPROM(mySong+skipCount) == '.'){
       period = true;
     }
     skipCount++;
+    Serial.println("j"); //DEBUG
   }
   //we are on a letter note
   int back=0;  //keep track how far away from letter note
-  while (!isDigit(pgm_read_byte_near(mySong+skipCount))) { //stop on nearest number to the left
-    char compare = pgm_read_byte_near(mySong+skipCount);
+  while (!isDigit(readEEPROM(mySong+skipCount))) { //stop on nearest number to the left
+    char compare = readEEPROM(mySong+skipCount);
     if(compare==','||compare=='+'||compare==':')
     break;
     skipCount--;
     back++;
+    Serial.println("f"); //DEBUG
   }
   //we are on a number
   int j = 0;
-  while (isdigit(pgm_read_byte_near(mySong+skipCount)))   //decrypt number backwards
+  while (isDigit(readEEPROM(mySong+skipCount)))   //decrypt number backwards
   {
-    num = ((pgm_read_byte_near(mySong+skipCount--) - '0') * powers[j]) + num ;
+    num = ((readEEPROM(mySong+skipCount--) - '0') * powers[j]) + num ;
     back++;
     j++;
+    Serial.print("e"); //DEBUG
+    Serial.println(skipCount);
   }
   skipCount+= back;//set skipCount to the letter note
-  while(pgm_read_byte_near(mySong+skipCount)!=','&&pgm_read_byte_near(mySong+skipCount)!='+'&& pgm_read_byte_near(mySong+skipCount)!=strlen_P(mySong))
-  skipCount++;
+  while(readEEPROM(mySong+skipCount)!=','&&readEEPROM(mySong+skipCount)!='+'&& readEEPROM(mySong+skipCount)!=getLength(mySong))
+   {
+    skipCount++;
+    Serial.println("k"); //DEBUG
+  }
   dur = 0;
   //Serial.print(num);
   if (num)
@@ -730,19 +773,26 @@ double MusicWithoutDelay :: skipSolver() {
     //Serial.print(".");
   }
   //Serial.println();
+
+  count++; //DEBUG
+  if(count % 100 == 0) {
+    Serial.print("s");
+    Serial.println(count);
+  }
   return dur;
 }
 MusicWithoutDelay& MusicWithoutDelay :: skipTo(long index) {
   timeBar = 0;
   int n = 0;
   skipCount = pLoc;
-  while (((unsigned)skipCount) < strlen_P(mySong)) {
+  while (((unsigned)skipCount) < getLength(mySong)) {
     if (timeBar < ((unsigned)index)) {
       n = skipCount;
       timeBar += skipSolver();  //adds time
+      Serial.println("g"); //DEBUG
     }
     else {
-      while (pgm_read_byte_near(mySong+n) != ',' && pgm_read_byte_near(mySong+n) != '+' && pgm_read_byte_near(mySong+n) != ':' ) {
+      while (readEEPROM(mySong+n) != ',' && readEEPROM(mySong+n) != '+' && readEEPROM(mySong+n) != ':' ) {
         n--;
       }
       n++;
@@ -867,4 +917,63 @@ bool MusicWithoutDelay :: isBackwards() {
 }
 void MusicWithoutDelay::setEngine(synthEngine *engine){
   noodleSynth = engine;
+}
+
+//Trent's additions
+byte MusicWithoutDelay :: readEEPROM(uint16_t addr){
+  static uint32_t count = 0; //DEBUG
+  byte rdata = 0xFF;
+  //Serial.println("TICK");
+ 
+  Wire.beginTransmission(0x50);
+  Wire.write((int)(addr >> 8));   // MSB
+  Wire.write((int)(addr & 0xFF)); // LSB
+  Wire.endTransmission();
+ 
+  Wire.requestFrom(0x50,1);
+ 
+  if (Wire.available())
+  {
+    rdata = Wire.read();
+    //Serial.println((char) rdata);
+  } 
+  count++; //DEBUG
+  if(count % 100 == 0) {
+  Serial.print(count); //DEBUG
+  Serial.print('\t');
+  Serial.println(addr);
+}
+
+  return rdata;
+  
+
+}
+
+uint16_t MusicWithoutDelay :: getLength(uint16_t place){
+  
+  if(place < TRACK2_LSB_LOC){ //check if we are referring to track 1 or track 2
+    //track 1
+    if(track1_len == 0){ //only read track from eeprom if you haven't done it before. 
+      byte LSB = readEEPROM(TRACK1_LSB_LOC); 
+      byte MSB = readEEPROM(TRACK1_MSB_LOC); 
+      uint16_t result = 0;
+      result += MSB << 8;
+      result += LSB;   
+      track1_len = result; //write the reconstructed value to the class variable
+    }
+    return track1_len; //return the value of the class variable
+  }
+  else{
+    //track 2: this is a mirror copy of the above, but tailored to TRACK 2
+    if(track2_len == 0){
+      byte LSB = readEEPROM(TRACK2_LSB_LOC);
+      byte MSB = readEEPROM(TRACK2_MSB_LOC); 
+      uint16_t result = 0;
+      result += MSB << 8;
+      result += LSB;   
+      track2_len = result; 
+    }
+    return track2_len;
+  }
+  
 }

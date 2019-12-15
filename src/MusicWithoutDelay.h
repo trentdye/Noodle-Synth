@@ -31,6 +31,7 @@ SOFTWARE.
 #include "Arduino.h"
 #include "synthEngine.h"
 
+#define I2C_ADDR 0x50
 
 #define NOTE_C1  24
 #define NOTE_CS1 25
@@ -122,11 +123,16 @@ SOFTWARE.
 #define NOTE_DS8 111
 //That took a while to get all the notes
 
+#define TRACK1_LSB_LOC 0
+#define TRACK1_MSB_LOC 1
+#define TRACK2_LSB_LOC 16000L
+#define TRACK2_MSB_LOC 16001L
+
 
 class MusicWithoutDelay
 {
 public:
-  MusicWithoutDelay(const char *p);
+  MusicWithoutDelay(uint16_t memLocation);
   MusicWithoutDelay();
   MusicWithoutDelay& begin(int mode, int waveForm, int envelope, int mod );
   MusicWithoutDelay& begin(int waveForm, int envelope, int mod);
@@ -135,7 +141,7 @@ public:
   MusicWithoutDelay& play(int repeat);
   MusicWithoutDelay& mute(bool m);
   MusicWithoutDelay& pause(bool p);
-  MusicWithoutDelay& newSong(const char *p);
+  MusicWithoutDelay& newSong(uint16_t memLocation);
   MusicWithoutDelay& setBPM(int tempo);
   MusicWithoutDelay& setMod(int percent);
   MusicWithoutDelay& setVolume(int volume);
@@ -165,6 +171,9 @@ public:
   bool isSustainOverrided();
   bool isSingleNote();
 
+  byte readEEPROM(uint16_t address);
+  uint16_t getLength(uint16_t place);
+
 private:
   double skipSolver();
   uint32_t pMillis;      //Yup...Thats a 'long' list of variables. Pun intended :D
@@ -191,8 +200,14 @@ private:
   bool resume, skip, single, reversed, wasPlaying, wasEnd, oneTime,delayer, rest, slur, start, finish, beat, isMute, sustainControl, flagRepeat, playSingleNote;
   char autoFlat[5];  //you can only have 5 of the black keys ;)
   char autoSharp[5];
-  char songName[15];  //make this smaller to get more SRAM
-  const char *mySong;
+  char songName[4];  //make this smaller to get more SRAM -- changed from 15 to 4
+  //const char *mySong;
+  uint16_t mySong;
   static synthEngine *noodleSynth;
+
+
+  uint16_t track1_len;
+  uint16_t track2_len;
+
 };
 #endif
